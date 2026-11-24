@@ -61,9 +61,10 @@ app.use((_req, res) => res.status(404).json({ error: 'not_found', message: 'Rout
 app.use((e, _req, res, _next) => {
   if (e.type === 'entity.parse.failed') return res.status(400).json({ error: 'invalid_json', message: 'JSON invalide' });
   if (e.type === 'entity.too.large') return res.status(413).json({ error: 'too_large', message: 'Requête trop volumineuse' });
-  const status = e.status && e.status < 600 ? e.status : 500;
-  if (status >= 500) console.error(e);
-  res.status(status).json({ error: status >= 500 ? 'server_error' : e.code, message: status >= 500 ? 'Erreur serveur' : e.message });
+  const known = e.name === 'ApiError' || (e.code && e.status);
+  const status = known && e.status < 600 ? e.status : 500;
+  if (!known) console.error(e);
+  res.status(status).json(known ? { error: e.code, message: e.message } : { error: 'server_error', message: 'Erreur serveur' });
 });
 
 // Tâche de nuit (03:15 UTC) : conservation RGPD + recalcul des propositions
