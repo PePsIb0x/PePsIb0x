@@ -628,6 +628,7 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
       case "prime": return (ends(".csv") || ends(".zip")) && n.indexOf("primevideo") >= 0 && (n.indexOf("viewinghistory") >= 0 || n.indexOf("viewing") >= 0);
       case "letterboxd": return base === "watched.csv";
       case "goodreads": return ends(".csv") && has("goodreads");
+      case "snapchat": return base === "subscriptions.json";
       default: return false;
     }
   };
@@ -802,7 +803,9 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
       }
       this.path.pop();
     } else if (typeof v === "string" || typeof v === "number") {
-      if (key != null) this.leaf(key, typeof v === "number" ? numStr(v) : v);
+      var sv = typeof v === "number" ? numStr(v) : v;
+      if (key != null) this.leaf(key, sv);
+      else if (this.provider === "snapchat") this.snapchat(null, sv);
     }
   };
   function numStr(n) { return Number.isInteger(n) ? String(n) : String(n); }
@@ -837,6 +840,9 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
         else if (k === "endtime" || k === "ts") this.sTs = v;
         else if (k === "msplayed" || k === "ms_played") { if (/^[+-]?\d+$/.test(v)) this.sMs = parseInt(v, 10); }
         break;
+      case "snapchat":
+        this.snapchat(k, v);
+        break;
       case "deezer":
         if (k === "artist" || k === "artist_name" || k === "artistname") { this.total++; this.primary.add(v, 1); }
         break;
@@ -845,6 +851,16 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
           this.total++; this.primary.add(showTitle(v), 1);
         }
     }
+  };
+
+  var NOT_A_NAME = /^(https?:\/\/.*|\d[\d \t\n\x0B\f\r:./TZ+-]*|true|false|null)$/i;
+  var SNAP_KEYS = ["name", "display name", "display_name", "title", "username", "user name", "publisher", "show"];
+  R.snapchat = function (k, v) { // subscriptions.json : comptes publics, éditeurs, émissions suivis
+    if (this.inPath("friend", "chat", "snap_history", "snap history", "location", "memories", "search", "message")) return;
+    if (k != null && SNAP_KEYS.indexOf(k) < 0) return;
+    if (v == null || NOT_A_NAME.test(jtrim(v))) return;
+    this.total++;
+    this.primary.add(v, 1);
   };
 
   R.isRecent = function (d) { // d et today : Date UTC à minuit
