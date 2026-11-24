@@ -409,6 +409,8 @@ async function exportMyData(u) {
       .map((p) => ({ id: Number(p.id), score: p.score, created_at: iso(p.created_at), matched_at: iso(p.matched_at), closed_at: iso(p.closed_at) })),
     messages_sent: (await q('SELECT body, created_at FROM messages WHERE author = ? ORDER BY id', [u]))
       .map((m) => ({ body: m.body, at: iso(m.created_at) })),
+    sign_in_providers: (await q('SELECT provider, email, created_at FROM auth_identities WHERE user_id = ?', [u]))
+      .map((i) => ({ provider: i.provider, email: i.email, linked_at: iso(i.created_at) })),
     blocks: Number((await one('SELECT COUNT(*) AS n FROM blocks WHERE blocker = ?', [u])).n),
     reports_sent: Number((await one('SELECT COUNT(*) AS n FROM reports WHERE reporter = ?', [u])).n),
   };

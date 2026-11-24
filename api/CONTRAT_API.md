@@ -114,3 +114,20 @@ Voir `private.pair_score` dans 0002. Résumé :
 5. Retrait d'un consentement : `sensitive_data` remet les 5 réponses à 0 ; `connector` efface les intérêts de la source.
 6. Conservation : intérêts 12 mois, messages 30 jours après fermeture (sauf signalement ouvert), comptes inactifs 24 mois.
 7. Secrets (JWT, MySQL, SMTP) uniquement en variables d'environnement, jamais dans le dépôt ni dans l'app.
+
+## Connexion Google et Apple (ajout v1.1, déployé)
+
+| Méthode et chemin | Corps | Réponse |
+|---|---|---|
+| `POST /auth/google` | `{id_token, nonce?}` | `200 Tokens` |
+| `POST /auth/apple` | `{id_token, nonce, name?}` | `200 Tokens` |
+
+- Google : signature vérifiée avec les clés JWKS de Google, `iss` = `accounts.google.com`, `aud` ∈ `GOOGLE_CLIENT_IDS`,
+  `exp`, `email_verified` vrai, `nonce` égal s'il est fourni.
+- Apple : clés JWKS d'Apple, `iss` = `https://appleid.apple.com`, `aud` ∈ `APPLE_CLIENT_IDS` (`ch.optimatools.cruchfinder`),
+  le claim `nonce` doit valoir le SHA-256 hexadécimal du `nonce` envoyé.
+- Compte identifié par (fournisseur, `sub`). Sinon rattaché au compte qui a le même e-mail ; si ce compte n'avait jamais
+  confirmé son e-mail, son mot de passe est invalidé et ses sessions révoquées. Sinon un compte est créé, e-mail confirmé.
+- Erreurs : `invalid_token` (401), `email_not_verified` (403), `provider_not_configured` (503 tant que la liste des
+  identifiants clients du fournisseur est vide), `rate_limited` (429, 30 / 15 min / IP).
+- `delete_my_account` efface aussi ces identités ; `export_my_data` les liste dans `sign_in_providers`.

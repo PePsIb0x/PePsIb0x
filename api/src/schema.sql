@@ -202,3 +202,16 @@ CREATE TABLE IF NOT EXISTS reports (
   FOREIGN KEY (reported) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (proposal_id) REFERENCES proposals(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Connexion Google / Apple : un compte est identifié par (provider, sub)
+CREATE TABLE IF NOT EXISTS auth_identities (
+  provider ENUM('google','apple') NOT NULL,
+  sub VARCHAR(255) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  email VARCHAR(254) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at DATETIME NULL,
+  PRIMARY KEY (provider, sub),
+  INDEX auth_identities_user (user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
