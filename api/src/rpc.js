@@ -14,7 +14,7 @@ const PROJECTS = ['wants', 'no', 'unsure', 'complete'];
 const MUST_HAVE = ['max60', 'same_relation', 'non_smoker'];
 const PURPOSES = ['terms', 'sensitive_data', 'connector', 'ads_personalized'];
 const CATEGORIES = ['music', 'listening', 'sport', 'series', 'books', 'authors', 'follows'];
-const SOURCES = ['google', 'strava', 'netflix', 'instagram', 'facebook', 'tiktok', 'disney', 'prime', 'spotify', 'deezer', 'letterboxd', 'goodreads'];
+const SOURCES = ['google', 'strava', 'netflix', 'instagram', 'facebook', 'tiktok', 'disney', 'prime', 'spotify', 'deezer', 'letterboxd', 'goodreads', 'snapchat'];
 const REASONS = ['harassment', 'fake', 'scam', 'minor', 'inappropriate', 'other'];
 
 const bad = (field) => err(400, 'invalid_input', `Champ invalide : ${field}`);

@@ -30,9 +30,11 @@ test('Google et Apple', async (t) => {
   let r = await post('/auth/google', { id_token: tok(g) });
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
   assert.strictEqual(r.body.user.email, 'g@example.test');
+  assert.strictEqual(r.body.created, true);
   const uid = r.body.user.id;
   r = await post('/auth/google', { id_token: tok({ ...g, email: 'changed@example.test' }) });
   assert.strictEqual(r.body.user.id, uid);                                   // retrouvé par sub
+  assert.strictEqual(r.body.created, false);
   assert.strictEqual((await post('/auth/google', { id_token: tok({ ...g, aud: 'autre' }) })).body.error, 'invalid_token');
   assert.strictEqual((await post('/auth/google', { id_token: tok(g, 'k1', other.privateKey) })).body.error, 'invalid_token');
   assert.strictEqual((await post('/auth/google', { id_token: tok({ ...g, iss: 'evil' }) })).body.error, 'invalid_token');
@@ -51,6 +53,7 @@ test('Google et Apple', async (t) => {
   await post('/auth/signup', { email: 'local@example.test', password: 'motdepasse123' });
   r = await post('/auth/google', { id_token: tok({ ...g, sub: 'g-local', email: 'local@example.test' }) });
   assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.body.created, false);
   assert.strictEqual((await post('/auth/login', { email: 'local@example.test', password: 'motdepasse123' })).body.error, 'invalid_credentials');
 
   // Effacement : les identités partent avec le compte

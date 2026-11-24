@@ -211,10 +211,11 @@ async function socialLogin(provider, req) {
                              WHERE i.provider = ? AND i.sub = ? FOR UPDATE`, [provider, id.sub], c);
     if (known) {
       await q('UPDATE auth_identities SET last_used_at = UTC_TIMESTAMP() WHERE provider = ? AND sub = ?', [provider, id.sub], c);
-      return issueTokens(known, c);
+      return { ...(await issueTokens(known, c)), created: false };
     }
     if (!id.email || !id.email_verified) throw err(403, 'email_not_verified', 'Adresse e-mail non vérifiée par le fournisseur.');
     let user = await one('SELECT * FROM users WHERE email = ? FOR UPDATE', [id.email], c);
+    const created = !user;
     if (user && !user.email_verified_at) {
       // Compte local jamais confirmé : son mot de passe a pu être choisi par un tiers, on l'invalide
       await q(`UPDATE users SET email_verified_at = UTC_TIMESTAMP(), password_hash = ? WHERE id = ?`,
@@ -229,7 +230,7 @@ async function socialLogin(provider, req) {
     }
     await q(`INSERT INTO auth_identities (provider, sub, user_id, email, last_used_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP())`,
       [provider, id.sub, user.id, id.email], c);
-    return issueTokens(user, c);
+    return { ...(await issueTokens(user, c)), created };
   });
 }
 

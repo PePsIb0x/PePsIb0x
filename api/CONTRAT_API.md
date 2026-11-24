@@ -77,7 +77,7 @@ les 5 questions sensibles sont forcées à 0 côté serveur. `questionnaire_done
 ### Centres d'intérêt
 
 `category` ∈ `music, listening, sport, series, books, authors, follows` ; `source` ∈ `google, strava, netflix, instagram,
-facebook, tiktok, disney, prime, spotify, deezer, letterboxd, goodreads` ; `weight` 1 à 3 ; 600 éléments max par source.
+facebook, tiktok, snapchat, disney, prime, spotify, deezer, letterboxd, goodreads` ; `weight` 1 à 3 ; 600 éléments max par source.
 Enregistrés seulement si le dernier consentement `connector`/`source` est accordé. Expiration 12 mois.
 
 ### `Proposal` renvoyée par `get_proposals`
@@ -121,6 +121,8 @@ Voir `private.pair_score` dans 0002. Résumé :
 |---|---|---|
 | `POST /auth/google` | `{id_token, nonce?}` | `200 Tokens` |
 | `POST /auth/apple` | `{id_token, nonce, name?}` | `200 Tokens` |
+
+La réponse de ces deux routes ajoute `"created": true` quand le compte vient d’être créé (sinon `false`) : l’app fait alors accepter les CGU et l’âge avant le profil.
 
 - Google : signature vérifiée avec les clés JWKS de Google, `iss` = `accounts.google.com`, `aud` ∈ `GOOGLE_CLIENT_IDS`,
   `exp`, `email_verified` vrai, `nonce` égal s'il est fourni.
