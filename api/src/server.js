@@ -37,8 +37,11 @@ app.use((req, _res, next) => {
 
 const v1 = express.Router();
 v1.get('/health', (_req, res) => res.json({ ok: true, version: 1, db: !!(app.locals.isReady && app.locals.isReady()) }));
-v1.use((_req, res, next) => (app.locals.isReady && !app.locals.isReady()
-  ? res.status(503).json({ error: 'starting', message: 'Démarrage en cours, réessayez dans un instant' }) : next()));
+// Les requêtes arrivées pendant le démarrage attendent la fin de la migration (quelques ms)
+v1.use((_req, res, next) => {
+  if (!app.locals.whenReady) return next();
+  app.locals.whenReady.then(() => next(), () => res.status(503).json({ error: 'server_error', message: 'Base indisponible' }));
+});
 v1.use('/auth', auth.router);
 
 v1.post('/rpc/:name', auth.requireUser, async (req, res, next) => {
@@ -82,8 +85,8 @@ app.locals.isReady = () => ready;
 function start() {
   const port = Number(process.env.PORT || 3000);
   const server = app.listen(port, () => console.log(`Cruch Finder API sur le port ${port}`));
-  migrate().then(() => { ready = true; scheduleNightly(); console.log('Base prête'); })
-    .catch((e) => { console.error('Migration impossible', e); });
+  app.locals.whenReady = migrate().then(() => { ready = true; scheduleNightly(); });
+  app.locals.whenReady.catch((e) => { console.error('Migration impossible', e); });
   return server;
 }
 
