@@ -36,7 +36,9 @@ app.use((req, _res, next) => {
 });
 
 const v1 = express.Router();
-v1.get('/health', (_req, res) => res.json({ ok: true, version: 1 }));
+v1.get('/health', (_req, res) => res.json({ ok: true, version: 1, db: !!(app.locals.isReady && app.locals.isReady()) }));
+v1.use((_req, res, next) => (app.locals.isReady && !app.locals.isReady()
+  ? res.status(503).json({ error: 'starting', message: 'Démarrage en cours, réessayez dans un instant' }) : next()));
 v1.use('/auth', auth.router);
 
 v1.post('/rpc/:name', auth.requireUser, async (req, res, next) => {
@@ -72,13 +74,17 @@ function scheduleNightly() {
   }, next - now).unref();
 }
 
-async function start() {
-  await migrate();
+// Hostinger exige un listen() immédiat au chargement du fichier d'entrée :
+// on écoute d'abord, la migration de la base se fait juste après.
+let ready = false;
+app.locals.isReady = () => ready;
+
+function start() {
   const port = Number(process.env.PORT || 3000);
-  app.listen(port, () => console.log(`Cruch Finder API sur le port ${port}`));
-  scheduleNightly();
+  const server = app.listen(port, () => console.log(`Cruch Finder API sur le port ${port}`));
+  migrate().then(() => { ready = true; scheduleNightly(); console.log('Base prête'); })
+    .catch((e) => { console.error('Migration impossible', e); });
+  return server;
 }
 
-if (require.main === module) start().catch((e) => { console.error(e); process.exit(1); });
-
-module.exports = { app, start };
+module.exports = { app, start, setReady: (v) => { ready = v; } };

@@ -10,7 +10,7 @@ const codes = {};
 const origLog = console.log;
 console.log = (...a) => { const m = /^\[mail:dev\] (\w+) -> (\S+) : (\d{6})$/.exec(a.join(' ')); if (m) codes[m[2] + ':' + m[1]] = m[3]; else origLog(...a); };
 
-const { app } = require('../src/server');
+const { app, setReady } = require('../src/server');
 const { migrate, q } = require('../src/db');
 const { nightly } = require('../src/rpc');
 let base;
@@ -45,6 +45,7 @@ test('parcours complet', async (t) => {
     try { await q(`DELETE FROM ${tb}`); } catch (_) { /* tables pas encore créées */ }
   }
   await migrate();
+  setReady(true);
   const srv = app.listen(0);
   base = `http://127.0.0.1:${srv.address().port}/v1`;
   t.after(async () => { srv.close(); await require('../src/db').getPool().end().catch(() => {}); });
