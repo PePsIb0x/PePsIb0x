@@ -12,7 +12,7 @@ const KIDS = ['none', 'dependent', 'shared', 'adult'];
 const KIDS_OK = ['any', 'none', 'with'];
 const PROJECTS = ['wants', 'no', 'unsure', 'complete'];
 const MUST_HAVE = ['max60', 'same_relation', 'non_smoker'];
-const PURPOSES = ['terms', 'sensitive_data', 'connector', 'ads_personalized'];
+const PURPOSES = ['terms', 'sensitive_data', 'connector', 'ads_personalized', 'location'];
 const CATEGORIES = ['music', 'listening', 'sport', 'series', 'books', 'authors', 'follows'];
 const SOURCES = ['google', 'strava', 'netflix', 'instagram', 'facebook', 'tiktok', 'disney', 'prime', 'spotify', 'deezer', 'letterboxd', 'goodreads', 'snapchat'];
 const REASONS = ['harassment', 'fake', 'scam', 'minor', 'inappropriate', 'other'];
@@ -67,6 +67,9 @@ async function recordConsent(u, p, conn) {
     await q(`UPDATE answers SET value = 0 WHERE user_id = ?
              AND question_id IN (SELECT id FROM questions WHERE \`sensitive\` IS NOT NULL)`, [u], conn);
   }
+  if (purpose === 'location' && !p.p_granted) {
+    await q('DELETE FROM user_locations WHERE user_id = ?', [u], conn);
+  }
   if (purpose === 'connector' && !p.p_granted) {
     await q('DELETE FROM user_interests WHERE user_id = ? AND source = ?', [u, scope], conn);
   }
@@ -91,7 +94,7 @@ function validateProfile(p) {
     lon: Math.round(lon * 100) / 100,
     seeks: subset(p.seeks, GENDERS, 'seeks', true),
     age_ranges: subset(p.age_ranges, AGE_RANGES, 'age_ranges', true),
-    max_km: int(p.max_km ?? 50, 'max_km', 1, 500),
+    max_km: int(p.max_km ?? 50, 'max_km', 0, 20000),   // 0 = monde entier
     relation: oneOf(p.relation, RELATIONS, 'relation'),
     marital_status: oneOf(p.marital_status ?? 'single', MARITAL, 'marital_status'),
     kids: oneOf(p.kids ?? 'none', KIDS, 'kids'),
@@ -183,7 +186,8 @@ async function syncState(u, { p }) {
 
 // ---------- Propositions ----------
 function normProfile(r) {
-  return { ...r, lat: Number(r.lat), lon: Number(r.lon), seeks: json(r.seeks, []), age_ranges: json(r.age_ranges, []),
+  const hasEff = r.eff_lat !== undefined && r.eff_lat !== null;
+  return { ...r, lat: Number(hasEff ? r.eff_lat : r.lat), lon: Number(hasEff ? r.eff_lon : r.lon), seeks: json(r.seeks, []), age_ranges: json(r.age_ranges, []),
     kids_ok: json(r.kids_ok, ['any']), project_ok: json(r.project_ok, ['any']), must_have: json(r.must_have, []),
     suspended: !!r.suspended, smoker: r.smoker === null || r.smoker === undefined ? 0 : Number(r.smoker) };
 }
@@ -210,8 +214,10 @@ async function loadInterests(userIds) {
 }
 
 const PROFILE_SQL = `SELECT p.*, COALESCE(s.suspended, 0) AS suspended,
+  COALESCE(l.lat, p.lat) AS eff_lat, COALESCE(l.lon, p.lon) AS eff_lon,
   (SELECT a.value FROM answers a JOIN questions qq ON qq.id = a.question_id WHERE a.user_id = p.user_id AND qq.slug = 'vie.fumeur') AS smoker
-  FROM profiles p LEFT JOIN account_status s ON s.user_id = p.user_id`;
+  FROM profiles p LEFT JOIN account_status s ON s.user_id = p.user_id
+  LEFT JOIN user_locations l ON l.user_id = p.user_id AND l.updated_at > UTC_TIMESTAMP() - INTERVAL 7 DAY`;
 
 // Calcule les propositions d'une personne (règle 2 : uniquement pour soi, ou par la tâche de nuit)
 async function refreshProposals(target, ctx) {
@@ -221,12 +227,13 @@ async function refreshProposals(target, ctx) {
   const me = normProfile(meRow);
   if (me.suspended) return 0;
   const qs = await questions();
-  // Préfiltre grossier par boîte englobante (rayon de la personne)
-  const dLat = me.max_km / 111, dLon = me.max_km / (111 * Math.max(0.1, Math.cos(me.lat * Math.PI / 180)));
+  // Préfiltre grossier par latitude (le rayon exact est vérifié par compatible) ; 0 = monde entier
+  const r = score.radius(me);
+  const dLat = Number.isFinite(r) ? Math.min(180, r / 111 + 0.1) : 180;
   const others = (await q(`${PROFILE_SQL} WHERE p.user_id <> ? AND p.questionnaire_done_at IS NOT NULL
-      AND p.lat BETWEEN ? AND ? AND p.lon BETWEEN ? AND ?
+      AND COALESCE(l.lat, p.lat) BETWEEN ? AND ?
       AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker = ? AND b.blocked = p.user_id) OR (b.blocker = p.user_id AND b.blocked = ?))`,
-  [target, me.lat - dLat, me.lat + dLat, me.lon - dLon, me.lon + dLon, target, target]))
+  [target, me.lat - dLat, me.lat + dLat, target, target]))
     .map(normProfile).filter((o) => score.compatible(me, o));
   if (!others.length) return 0;
   const ids = [target, ...others.map((o) => o.user_id)];
@@ -236,7 +243,8 @@ async function refreshProposals(target, ctx) {
   let n = 0;
   for (const o of others) {
     const s = score.pairScore(qs, answers.get(target), answers.get(o.user_id), interests.get(target), interests.get(o.user_id), popular, cfg);
-    if (s.common_count < cfg.min_common_answers || s.score < cfg.match_threshold) continue;
+    const prox = score.proximity(score.band(score.km(me.lat, me.lon, o.lat, o.lon)));
+    if (s.common_count < cfg.min_common_answers || Math.min(100, s.score + prox) < cfg.match_threshold) continue;
     const [a, b] = target < o.user_id ? [target, o.user_id] : [o.user_id, target];
     const open = 'matched_at IS NULL AND closed_at IS NULL';
     await q(`INSERT INTO proposals (user_a, user_b, score, qscore, bonus, common_tags, common_count, module_scores, shared)
@@ -271,24 +279,55 @@ async function refreshMyProposals(u) {
 }
 
 async function getProposals(u) {
-  const meRow = await one('SELECT lat, lon FROM profiles WHERE user_id = ?', [u]);
+  const meRow = await one(`${PROFILE_SQL} WHERE p.user_id = ?`, [u]);
   if (!meRow) return [];
-  const rows = await q(`SELECT p.*, o.pseudo, o.birth_date, o.gender, o.city_name, o.relation, o.bio, o.lat, o.lon,
+  const me = normProfile(meRow);
+  const rows = await q(`SELECT p.*, o.pseudo, o.birth_date, o.gender, o.city_name, o.relation, o.bio,
+      COALESCE(l.lat, o.lat) AS o_lat, COALESCE(l.lon, o.lon) AS o_lon, v.last_band,
       IF(p.user_a = ?, p.decision_a, p.decision_b) AS my_decision
     FROM proposals p
     JOIN profiles o ON o.user_id = IF(p.user_a = ?, p.user_b, p.user_a)
+    LEFT JOIN user_locations l ON l.user_id = o.user_id AND l.updated_at > UTC_TIMESTAMP() - INTERVAL 7 DAY
+    LEFT JOIN proposal_views v ON v.proposal_id = p.id AND v.user_id = ?
     LEFT JOIN account_status st ON st.user_id = o.user_id
     WHERE ? IN (p.user_a, p.user_b) AND p.closed_at IS NULL
       AND IF(p.user_a = ?, p.decision_a, p.decision_b) <> 'refused'
       AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker = p.user_a AND b.blocked = p.user_b) OR (b.blocker = p.user_b AND b.blocked = p.user_a))
       AND COALESCE(st.suspended, 0) = 0
-    ORDER BY p.score DESC, p.id`, [u, u, u, u]);
-  return rows.map((r) => ({
-    id: Number(r.id), pseudo: r.pseudo, age: score.ageOf(r.birth_date), gender: r.gender, city: r.city_name,
-    relation: r.relation, bio: r.bio, km: Math.max(1, Math.round(score.km(Number(meRow.lat), Number(meRow.lon), Number(r.lat), Number(r.lon)))),
-    score: r.score, qscore: r.qscore, bonus: r.bonus, common_tags: json(r.common_tags, []), common_count: r.common_count,
-    modules: json(r.module_scores, null), shared: json(r.shared, {}), my_decision: r.my_decision, matched: !!r.matched_at,
-  }));
+    ORDER BY p.id`, [u, u, u, u, u]);
+  const out = [];
+  const views = [];
+  for (const r of rows) {
+    // Jamais de km exacts (triangulation) : uniquement une tranche
+    const dist_band = score.band(score.km(me.lat, me.lon, Number(r.o_lat), Number(r.o_lon)));
+    const proximity = score.proximity(dist_band);
+    const closer = !!r.last_band && score.bandRank(dist_band) < score.bandRank(r.last_band);
+    if (r.last_band !== dist_band) views.push([r.id, u, dist_band]);
+    out.push({
+      id: Number(r.id), pseudo: r.pseudo, age: score.ageOf(r.birth_date), gender: r.gender, city: r.city_name,
+      relation: r.relation, bio: r.bio, dist_band, closer,
+      score: Math.min(100, (r.qscore ?? 0) + r.bonus + proximity), qscore: r.qscore, bonus: r.bonus, proximity,
+      common_tags: json(r.common_tags, []), common_count: r.common_count,
+      modules: json(r.module_scores, null), shared: json(r.shared, {}), my_decision: r.my_decision, matched: !!r.matched_at,
+    });
+  }
+  if (views.length) {
+    await q('INSERT INTO proposal_views (proposal_id, user_id, last_band) VALUES ? ON DUPLICATE KEY UPDATE last_band = VALUES(last_band)', [views]);
+  }
+  return out.sort((a, b) => (b.score - a.score) || (a.id - b.id));
+}
+
+// GPS approximatif, facultatif, sous consentement « location »
+async function updateLocation(u, { p_lat, p_lon }) {
+  if (!(await hasConsent(u, 'location'))) throw err(403, 'consent_required', 'Autorisez la localisation pour utiliser le GPS.');
+  const lat = Number(p_lat), lon = Number(p_lon);
+  if (!(lat >= -90 && lat <= 90) || !(lon >= -180 && lon <= 180)) throw bad('p_lat/p_lon');
+  const round = (x) => Math.round(Math.round(x / 0.02) * 0.02 * 100) / 100;   // ~2 km
+  const last = await one('SELECT updated_at > UTC_TIMESTAMP() - INTERVAL 10 MINUTE AS recent FROM user_locations WHERE user_id = ?', [u]);
+  if (last && Number(last.recent) === 1) throw err(429, 'rate_limited', 'Position déjà mise à jour il y a moins de 10 minutes.');
+  await q(`INSERT INTO user_locations (user_id, lat, lon, updated_at) VALUES (?, ?, ?, UTC_TIMESTAMP())
+           ON DUPLICATE KEY UPDATE lat = VALUES(lat), lon = VALUES(lon), updated_at = VALUES(updated_at)`, [u, round(lat), round(lon)]);
+  return null;
 }
 
 // Règle 3 : un refus (avant ou après le match) ferme la proposition et le chat
@@ -387,7 +426,7 @@ async function getMyState(u) {
   return {
     profile: profileOut(pr),
     answers: answers.map((a) => [a.question_id, a.value]),
-    consents: { terms: await hasConsent(u, 'terms'), sensitive: await hasConsent(u, 'sensitive_data'), ads: await hasConsent(u, 'ads_personalized') },
+    consents: { terms: await hasConsent(u, 'terms'), sensitive: await hasConsent(u, 'sensitive_data'), ads: await hasConsent(u, 'ads_personalized'), location: await hasConsent(u, 'location') },
     interest_sources: sources.map((s) => s.source),
   };
 }
@@ -409,6 +448,8 @@ async function exportMyData(u) {
       .map((p) => ({ id: Number(p.id), score: p.score, created_at: iso(p.created_at), matched_at: iso(p.matched_at), closed_at: iso(p.closed_at) })),
     messages_sent: (await q('SELECT body, created_at FROM messages WHERE author = ? ORDER BY id', [u]))
       .map((m) => ({ body: m.body, at: iso(m.created_at) })),
+    location: await (async () => { const l = await one('SELECT lat, lon, updated_at FROM user_locations WHERE user_id = ?', [u]);
+      return l ? { lat: Number(l.lat), lon: Number(l.lon), updated_at: iso(l.updated_at) } : null; })(),
     sign_in_providers: (await q('SELECT provider, email, created_at FROM auth_identities WHERE user_id = ?', [u]))
       .map((i) => ({ provider: i.provider, email: i.email, linked_at: iso(i.created_at) })),
     blocks: Number((await one('SELECT COUNT(*) AS n FROM blocks WHERE blocker = ?', [u])).n),
@@ -432,6 +473,7 @@ async function nightly() {
            WHERE p.closed_at < UTC_TIMESTAMP() - INTERVAL 30 DAY
              AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.proposal_id = p.id AND r.status = 'open')`);
   await q('DELETE FROM users WHERE COALESCE(last_sign_in_at, created_at) < UTC_TIMESTAMP() - INTERVAL 24 MONTH');
+  await q('DELETE FROM user_locations WHERE updated_at < UTC_TIMESTAMP() - INTERVAL 7 DAY');
   await q("DELETE FROM auth_codes WHERE expires_at < UTC_TIMESTAMP() - INTERVAL 1 DAY");
   await q('DELETE FROM refresh_tokens WHERE expires_at < UTC_TIMESTAMP()');
   const cfg = await one('SELECT * FROM app_settings WHERE id = 1');
@@ -447,6 +489,7 @@ const HANDLERS = {
   record_consent: (u, p) => recordConsent(u, p),
   refresh_my_proposals: (u) => refreshMyProposals(u),
   get_proposals: (u) => getProposals(u),
+  update_location: updateLocation,
   decide,
   get_messages: getMessages,
   send_message: sendMessage,

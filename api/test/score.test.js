@@ -55,3 +55,15 @@ test('filtres éliminatoires', () => {
   assert.strictEqual(s.ageOf('2008-11-25', now), 17);
   assert.ok(s.inRanges(72, ['70+']));
 });
+
+test('rayon 0 = monde entier, tranches', () => {
+  const base = { gender: 'femme', seeks: ['homme'], birth_date: '1995-01-01', age_ranges: ['25-29', '30-39'], lat: 46.52, lon: 6.63,
+    max_km: 0, must_have: [], relation: 'serieuse', kids: 'none', kids_ok: ['any'], family_project: 'wants', project_ok: ['any'], smoker: 0, suspended: false };
+  const china = { ...base, gender: 'homme', seeks: ['femme'], lat: 39.9, lon: 116.4 };
+  const now = new Date('2026-11-24');
+  assert.ok(s.compatible(base, china, now));
+  assert.ok(!s.compatible(base, { ...china, max_km: 500 }, now));
+  assert.ok(!s.compatible({ ...base, must_have: ['max60'] }, china, now));
+  assert.strictEqual(s.band(4.9), 'lt5'); assert.strictEqual(s.band(5), '5-20'); assert.strictEqual(s.band(8000), 'gt1000');
+  assert.deepStrictEqual(['lt5', '5-20', '20-50', '50-200', '200-1000'].map(s.proximity), [3, 3, 2, 1, 0]);
+});

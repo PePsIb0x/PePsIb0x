@@ -77,7 +77,24 @@ test('parcours complet', async (t) => {
   assert.strictEqual(r.body.length, 1);
   const p = r.body[0];
   assert.strictEqual(p.pseudo, 'Nora');
-  assert.ok(p.score >= 50 && p.km > 10 && p.km < 30, JSON.stringify(p));
+  assert.ok(p.score >= 50 && p.dist_band === '5-20' && p.proximity === 3 && p.closer === false && !('km' in p), JSON.stringify(p));
+  assert.strictEqual(p.score, Math.min(100, p.qscore + p.bonus + 3));
+
+  // GPS : refusé sans consentement, puis Nora se rapproche -> tranche plus proche, closer
+  assert.strictEqual((await rpc('update_location', { p_lat: 46.52, p_lon: 6.63 }, N.tok)).body.error, 'consent_required');
+  await rpc('record_consent', { p_purpose: 'location', p_scope: null, p_granted: true, p_version: 'v1' }, N.tok);
+  assert.strictEqual((await rpc('update_location', { p_lat: 46.5231, p_lon: 6.6409 }, N.tok)).status, 200);
+  assert.strictEqual((await rpc('update_location', { p_lat: 46.5, p_lon: 6.6 }, N.tok)).body.error, 'rate_limited');
+  const loc = await q("SELECT lat, lon FROM user_locations l JOIN users u ON u.id = l.user_id WHERE u.email = 'nora@example.test'");
+  assert.deepStrictEqual([Number(loc[0].lat), Number(loc[0].lon)], [46.52, 6.64]);
+  const p2 = (await rpc('get_proposals', {}, A.tok)).body[0];
+  assert.strictEqual(p2.dist_band, 'lt5');
+  assert.strictEqual(p2.closer, true);
+  assert.strictEqual((await rpc('get_proposals', {}, A.tok)).body[0].closer, false);
+  assert.strictEqual((await rpc('get_my_state', {}, N.tok)).body.profile.lon, 6.84);
+  await rpc('record_consent', { p_purpose: 'location', p_scope: null, p_granted: false, p_version: 'v1' }, N.tok);
+  assert.strictEqual(Number((await q("SELECT COUNT(*) AS n FROM user_locations"))[0].n), 0);
+  assert.strictEqual((await rpc('get_proposals', {}, A.tok)).body[0].dist_band, '5-20');
   assert.strictEqual(p.modules.length, 6);
   assert.ok(!('email' in p));
 

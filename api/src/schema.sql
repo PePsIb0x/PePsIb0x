@@ -215,3 +215,25 @@ CREATE TABLE IF NOT EXISTS auth_identities (
   INDEX auth_identities_user (user_id),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- v1.2 : consentement « location » et position GPS approximative (jamais renvoyée à personne)
+ALTER TABLE consents MODIFY purpose ENUM('terms','sensitive_data','connector','ads_personalized','location') NOT NULL;
+
+CREATE TABLE IF NOT EXISTS user_locations (
+  user_id CHAR(36) PRIMARY KEY,
+  lat DECIMAL(6,2) NOT NULL,
+  lon DECIMAL(6,2) NOT NULL,
+  updated_at DATETIME NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dernière tranche de distance vue par chaque personne, pour « closer »
+CREATE TABLE IF NOT EXISTS proposal_views (
+  proposal_id BIGINT NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  last_band VARCHAR(10) NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (proposal_id, user_id),
+  FOREIGN KEY (proposal_id) REFERENCES proposals(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

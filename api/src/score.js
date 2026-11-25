@@ -94,7 +94,16 @@ function km(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-function radius(p) { return p.must_have.includes('max60') ? Math.min(p.max_km, 60) : p.max_km; }
+// 0 = monde entier (pas de limite) ; max60 plafonne à 60 km
+function radius(p) {
+  const r = p.max_km > 0 ? p.max_km : Infinity;
+  return p.must_have.includes('max60') ? Math.min(r, 60) : r;
+}
+
+const BANDS = [['lt5', 5], ['5-20', 20], ['20-50', 50], ['50-200', 200], ['200-1000', 1000], ['gt1000', Infinity]];
+function band(d) { return BANDS.find(([, max]) => d < max)[0]; }
+function bandRank(b) { return BANDS.findIndex(([n]) => n === b); }
+function proximity(b) { return b === 'lt5' || b === '5-20' ? 3 : b === '20-50' ? 2 : b === '50-200' ? 1 : 0; }
 
 // a, b : profils normalisés (tableaux décodés, lat/lon en nombres, smoker = valeur de vie.fumeur, suspended)
 function compatible(a, b, now = new Date()) {
@@ -113,4 +122,4 @@ function compatible(a, b, now = new Date()) {
   return true;
 }
 
-module.exports = { MODULES, penalty, questionScore, sharedInterests, pairScore, ageOf, inRanges, km, compatible };
+module.exports = { BANDS, band, bandRank, proximity, radius, MODULES, penalty, questionScore, sharedInterests, pairScore, ageOf, inRanges, km, compatible };

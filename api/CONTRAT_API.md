@@ -133,3 +133,15 @@ La réponse de ces deux routes ajoute `"created": true` quand le compte vient d�
 - Erreurs : `invalid_token` (401), `email_not_verified` (403), `provider_not_configured` (503 tant que la liste des
   identifiants clients du fournisseur est vide), `rate_limited` (429, 30 / 15 min / IP).
 - `delete_my_account` efface aussi ces identités ; `export_my_data` les liste dans `sign_in_providers`.
+
+## Distance et GPS (v1.2, déployé)
+
+- `max_km` : 0 à 20000 ; 0 = monde entier. Filtre mutuel : le plus petit des deux rayons (0 = illimité ; `max60` plafonne à 60).
+- Consentement `purpose: "location"` (facultatif). Son retrait efface la position.
+- `POST /rpc/update_location` `{p_lat, p_lon}` → `null`. `403 consent_required` sans consentement, `429 rate_limited` si
+  moins de 10 min depuis la dernière mise à jour. Arrondi serveur à 0,02° (~2 km), table privée, jamais renvoyée à
+  personne, effacée après 7 jours sans mise à jour. Sans GPS frais, la position de la ville est utilisée.
+- `get_proposals` : `km` est remplacé par `dist_band` ∈ `lt5, 5-20, 20-50, 50-200, 200-1000, gt1000`, plus `closer`
+  (true si la tranche est plus proche qu'au précédent appel de la même personne) et `proximity`
+  (3 pour lt5 et 5-20, 2 pour 20-50, 1 pour 50-200, 0 au-delà). `score = min(100, qscore + bonus + proximity)`.
+- `get_my_state.consents.location` ; `export_my_data.location` = `{lat, lon, updated_at}` ou `null`.
