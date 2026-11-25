@@ -40,6 +40,7 @@ p{margin:0}
 button{font:inherit;cursor:pointer}
 .btn{border:0;border-radius:14px;padding:14px 18px;font-weight:600;background:var(--accent);color:var(--accent-ink);width:100%}
 .btn.ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
+.seg{display:flex;gap:4px;padding:4px;border:1.5px solid var(--line);border-radius:14px}.seg button{flex:1;border:0;border-radius:10px;padding:10px;background:transparent;color:var(--ink);font-weight:600}.seg button[aria-selected="true"]{background:var(--accent);color:var(--accent-ink)}
 .btn.social{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:#1f1f1f;border:1px solid #dadce0}.btn.social span{pointer-events:none}.btn.social.apple{background:#000;color:#fff;border-color:#000}.btn.social .g{font-weight:800;color:#4285f4;font-size:18px}.center{text-align:center}
 .btn.small{width:auto;padding:9px 14px;font-size:14px;border-radius:11px}
 .btn:focus-visible,.chip:focus-visible,.tab:focus-visible,.lik button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--deep);outline-offset:2px}
@@ -388,7 +389,32 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
     return { saved: true };
   }
 
+  // ---------- Position (seulement app ouverte, arrondie à 0,01°, jamais en arrière-plan) ----------
+  function round2(x) { return Math.round(x * 100) / 100; }
+  function geoError(code) { return new ApiError(0, { error: code, message: code }); }
+  async function geoCurrent() {
+    var G = isApp && window.Capacitor.Plugins.Geolocation, pos;
+    if (G) {
+      var perm = await G.checkPermissions().catch(function () { return {}; });
+      if (perm.location !== "granted" && perm.coarseLocation !== "granted") {
+        perm = await G.requestPermissions({ permissions: ["coarseLocation"] }).catch(function () { return {}; });
+        if (perm.location !== "granted" && perm.coarseLocation !== "granted") throw geoError("permission_denied");
+      }
+      try { pos = await G.getCurrentPosition({ enableHighAccuracy: false, timeout: 15000, maximumAge: 600000 }); }
+      catch (e) { throw geoError(/denied|permission/i.test(String(e && e.message)) ? "permission_denied" : "location_unavailable"); }
+    } else {
+      if (!navigator.geolocation) throw geoError("location_unavailable");
+      pos = await new Promise(function (res, rej) {
+        navigator.geolocation.getCurrentPosition(res, function (e) {
+          rej(geoError(e && e.code === 1 ? "permission_denied" : "location_unavailable"));
+        }, { enableHighAccuracy: false, timeout: 15000, maximumAge: 600000 });
+      });
+    }
+    return { lat: round2(pos.coords.latitude), lon: round2(pos.coords.longitude) };
+  }
+
   var methods = {
+    "geo.current":         geoCurrent,
     "auth.signUp":         function (a) { return http("/auth/signup", { email: a.email, password: a.password }).then(function (r) { return r || { needsVerification: true }; }); },
     "auth.verifySignup":   function (a) { return http("/auth/verify", { email: a.email, code: a.code }).then(function (t) { saveTokens(t); return session(); }); },
     "auth.resend":         function (a) { return http("/auth/resend", { email: a.email }); },
@@ -1138,6 +1164,14 @@ const GEO={"Suisse":[["Lausanne",46.52,6.63],["Genève",46.20,6.14],["Fribourg",
  "Canada":[["Montréal",45.50,-73.57],["Québec",46.81,-71.21]]};
 const COORD={};Object.entries(GEO).forEach(([c,l])=>l.forEach(([n,la,lo])=>COORD[n]={c,la,lo}));
 function dist(a,b){const A=COORD[a],B=COORD[b];if(!A||!B)return 9999;const r=Math.PI/180,x=(B.lo-A.lo)*r*Math.cos((A.la+B.la)*r/2),y=(B.la-A.la)*r;return Math.max(1,Math.round(6371*Math.hypot(x,y)))}
+// Distances : toujours en tranches, jamais en km exacts (pas de triangulation possible)
+const BANDS=[["lt5","Moins de 5 km",5],["5-20","5 à 20 km",20],["20-50","20 à 50 km",50],["50-200","50 à 200 km",200],["200-1000","200 à 1000 km",1000],["gt1000","Plus de 1000 km",Infinity]];
+const bandOf=km=>(BANDS.find(b=>km<b[2])||BANDS[BANDS.length-1])[0];
+const bandIdx=b=>Math.max(0,BANDS.findIndex(x=>x[0]===b));
+const pBand=p=>p.band||bandOf(p.km);
+const bandLabel=p=>BANDS[bandIdx(pBand(p))][1];
+const closerTag=p=>p.closer?' <span class="tag ok">S’est rapproché·e</span>':"";
+const kmText=km=>+km===0?"Monde entier":km+" km";
 const gname=g=>(GENDERS.find(x=>x[0]===g)||["",""])[1];
 const CATS={books:"Livres",authors:"Auteurs",music:"Artistes",genres:"Styles de musique",listening:"Habitudes d'écoute",sport:"Sports",sporttime:"Rythme sportif",series:"Films et séries",videos:"Types de vidéos",follows:"Abonnements en commun",games:"Jeux",rythme:"Sommeil",friends:"Amis en commun",places:"Lieux visités",food:"Restaurants aimés",social:"Réseaux sociaux",identity:"Connexion"};
 const CONNECTORS = [
@@ -1356,7 +1390,7 @@ function qscore(p){if(p.remote)return p.qscore||0;let s=0,w=0;pairs(p).forEach((
 function score(p){if(p.remote)return p.score;if(pairs(p).length<MIN_COMMON)return 0;const q=qscore(p);return q?Math.min(100,q+bonus(p)):0}
 function common(p){if(p.remote)return p.common_tags||[];return pairs(p).filter(([i])=>QS[i].mode==="sim"&&!QS[i].sensitive).map(([i,v])=>({tag:QS[i].tag,v,w:QS[i].w})).sort((x,y)=>y.v-x.v||y.w-x.w).slice(0,3).map(x=>x.tag)}
 function syncKm(){PROFILES.forEach(p=>p.km=dist(S.profile.city,p.city))}
-function passFilters(p){const pr=S.profile;return pr.seek.includes(p.g)&&pr.ages.some(r=>{const[a,b]=r.split("-").map(Number);return p.age>=a&&p.age<=b})&&p.km<=pr.km}
+function passFilters(p){const pr=S.profile;return pr.seek.includes(p.g)&&pr.ages.some(r=>{const[a,b]=r.split("-").map(Number);return p.age>=a&&p.age<=b})&&(+pr.km===0||p.km<=pr.km)}
 function candidates(){return REMOTE()?(S.remote||[]):PROFILES.filter(passFilters).map(p=>({...p,score:score(p)}))}
 function proposals(){return candidates().filter(p=>p.score>=MIN_PROPOSAL_SCORE&&!["refused","match","blocked"].includes(S.status[p.id])).sort((a,b)=>b.score-a.score)}
 function matches(){return allProfiles().filter(p=>S.status[p.id]==="match").map(p=>({...p,score:score(p)}))}
@@ -1367,8 +1401,14 @@ function proposalCard(p){
  const tags=S.status[p.id]==="waiting"
   ? '<span class="tag">En attente de sa réponse</span>'
   : common(p).slice(0,2).map(t=>`<span class="tag ok">${esc(t)}</span>`).join(" ");
- return `<button class="card prop" data-open="${p.id}">${avatar(p)}<div style="flex:1;min-width:0"><h3>${esc(p.name)}, ${p.age}</h3><p class="small muted">${esc(p.city)} · ${p.km} km</p><p class="small" style="margin-top:4px">${tags}</p></div>${ring(p.score)}</button>`;
+ return `<button class="card prop" data-open="${p.id}">${avatar(p)}<div style="flex:1;min-width:0"><h3>${esc(p.name)}, ${p.age}</h3><p class="small muted">${esc(p.city)} · ${bandLabel(p)}${closerTag(p)}</p><p class="small" style="margin-top:4px">${tags}</p></div>${ring(p.score)}</button>`;
 }
+function distanceView(list){
+ const sorted=[...list].sort((a,b)=>bandIdx(pBand(a))-bandIdx(pBand(b))||b.score-a.score);
+ const near=sorted.filter(p=>p.closer);
+ return (near.length?`<div class="card stack"><h3>Se sont rapprochés</h3><p class="small muted">Depuis votre dernière visite, ces personnes compatibles sont dans une tranche de distance plus proche.</p>${near.map(proposalCard).join("")}</div>`:"")
+  +BANDS.map(([b,label],i)=>{const ps=sorted.filter(p=>pBand(p)===b);return ps.length?proposalBand({id:"band-"+i,title:label,range:`${ps.length} ${ps.length>1?"personnes":"personne"}`,profiles:ps,adEvery:5}):""}).join("")
+  +`<p class="small muted">${+S.profile.km===0?"Votre recherche couvre le monde entier.":`Votre rayon : ${S.profile.km} km. Choisissez « Monde entier » dans vos critères pour voir aussi les affinités lointaines.`} Les distances sont des tranches, jamais une position.</p>`}
 function proposalBand({id,title,range,profiles,adEvery}){
  const items=profiles.map((p,i)=>proposalCard(p)+((i+1)%adEvery===0?adBanner():"")).join("");
  return `<section class="stack proposal-band" aria-labelledby="${id}"><header><h3 id="${id}">${title}</h3><span class="small">${range}</span></header>
@@ -1904,7 +1944,7 @@ function applyServerState(st){const p=st.profile;if(p){const pr=S.profile;
   kidsOk:(p.kids_ok||[]).map(k=>UNCODE.kidsOk[k]).filter(Boolean),proj:UNCODE.proj[p.family_project]||pr.proj,
   projOk:(p.project_ok||[]).map(k=>UNCODE.proj[k]).filter(Boolean),must:(p.must_have||[]).map(m=>UNCODE.must[m]).filter(Boolean)})}
  if(Array.isArray(st.answers)&&st.answers.length){S.ans=Array(QS.length).fill(null);st.answers.forEach(([n,v])=>{if(n>=1&&n<=QS.length)S.ans[n-1]=v})}
- if(st.consents)Object.assign(S.consents,{terms:!!st.consents.terms,sensitive:!!st.consents.sensitive,ads:!!st.consents.ads});
+ if(st.consents)Object.assign(S.consents,{terms:!!st.consents.terms,sensitive:!!st.consents.sensitive,ads:!!st.consents.ads,location:!!st.consents.location});
  S.adsConsent=!!S.consents.ads;applySensitive()}
 
 // Questions sensibles : posées seulement avec le consentement explicite
@@ -1917,14 +1957,21 @@ function interestPayload(c){const d=S.conn[c.id];if(!d||c.unavailable)return[];c
  else{(d.primary||[]).slice(0,250).forEach((l,i)=>add(c.cat,l,i<20?3:i<80?2:1));(d.secondary||[]).slice(0,100).forEach(l=>add(c.cat2,l,1))}
  return out}
 async function syncAll(){
- const consents=[{purpose:"terms",granted:true,version:CONSENT_VERSION},{purpose:"sensitive_data",granted:!!S.consents.sensitive,version:CONSENT_VERSION},{purpose:"ads_personalized",granted:!!S.adsConsent,version:CONSENT_VERSION}];
+ const consents=[{purpose:"terms",granted:true,version:CONSENT_VERSION},{purpose:"sensitive_data",granted:!!S.consents.sensitive,version:CONSENT_VERSION},{purpose:"ads_personalized",granted:!!S.adsConsent,version:CONSENT_VERSION},{purpose:"location",granted:!!S.consents.location,version:CONSENT_VERSION}];
  const interests={};CONNECTORS.forEach(c=>{if(c.unavailable)return;const has=!!S.conn[c.id];consents.push({purpose:"connector",scope:c.id,granted:has,version:CONSENT_VERSION});interests[c.id]=interestPayload(c)});
  return API.rpc("sync_state",{p:{consents,profile:profilePayload(),answers:S.ans.map((v,i)=>[i+1,v]).filter(x=>x[1]!=null),interests}})}
 const PALETTE=["#B83B6E","#3B6EB8","#2E7D5B","#9A6400","#6A3BB8","#B8573B","#3B9AB8"];
 function fromServer(r){const st=r.matched?"match":r.my_decision==="accepted"?"waiting":undefined;
- return{remote:true,id:r.id,name:r.pseudo,age:r.age,g:UNCODE.gender[r.gender]||"AU",city:r.city,km:r.km,rel:UNCODE.rel[r.relation]||"",bio:r.bio||"",
+ return{remote:true,id:r.id,name:r.pseudo,age:r.age,g:UNCODE.gender[r.gender]||"AU",city:r.city,km:r.km,band:r.dist_band||(r.km!=null?bandOf(r.km):"gt1000"),closer:!!r.closer,proximity:r.proximity||0,rel:UNCODE.rel[r.relation]||"",bio:r.bio||"",
   col:PALETTE[r.id%PALETTE.length],score:r.score,qscore:r.qscore,bonus:r.bonus,common_tags:r.common_tags||[],common_count:r.common_count,
   modules:r.modules||[],shared:r.shared||{},status:st}}
+// Position approximative : seulement app ouverte, au plus toutes les 10 minutes, avec consentement « location »
+async function geoUpdate(force){if(!REMOTE()||!S.consents.location)return false;
+ if(!force&&S.geoAt&&Date.now()-S.geoAt<600000)return true;
+ try{const g=await API.call("geo.current",{});if(!g||!isFinite(g.lat)||!isFinite(g.lon))return false;
+  await API.rpc("update_location",{p_lat:Math.round(g.lat*100)/100,p_lon:Math.round(g.lon*100)/100});S.geoAt=Date.now();
+  await loadProposals(true);if(S.view==="proposals")render();return true}catch(e){return /rate/i.test(e.code||"")}}
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")geoUpdate(false)});
 async function loadProposals(refresh){if(refresh){try{await API.rpc("refresh_my_proposals")}catch(e){}}
  const rows=await API.rpc("get_proposals");S.remote=(rows||[]).map(fromServer);S.remoteAt=Date.now();
  S.remote.forEach(p=>{if(p.status)S.status[p.id]=p.status;else if(S.status[p.id]!=="refused")delete S.status[p.id]})}
@@ -1943,7 +1990,7 @@ async function socialLogin(p){if(S.authBusy)return;S.authBusy=true;
  catch(e){S.authBusy=false;if(/cancel/i.test(e.code||""))return;toast(errText(e))}}
 async function afterLogin(email){S.session={email};S.authBusy=false;
  let st=null;try{st=await API.rpc("get_my_state")}catch(e){}
- if(st&&st.profile){applyServerState(st);try{await loadProposals(false)}catch(e){}go(st.answers&&st.answers.length>=QS.length?"proposals":"quiz",{step:0})}
+ if(st&&st.profile){applyServerState(st);geoUpdate(false);try{await loadProposals(false)}catch(e){}go(st.answers&&st.answers.length>=QS.length?"proposals":"quiz",{step:0})}
  else go("profile",{acceptedTerms:true})}
 async function authSubmit(){if(S.authBusy)return;const m=S.authMode||"signup",email=$("#au-email").value.trim().toLowerCase(),pw=$("#au-pass").value;
  S.authEmail=email;if(!emailOk(email)){toast("Entrez une adresse e-mail valide.");$("#au-email").focus();return}
@@ -2087,7 +2134,8 @@ profile(){const p=S.profile;return `
  </section>
  <section class="profile-section stack" id="profile-criteria" aria-labelledby="profile-criteria-title">
  <h3 id="profile-criteria-title" tabindex="-1">Mes critères</h3>
- <label class="f">Distance maximale : <span id="kmv">${p.km} km</span><input id="km" class="slider" type="range" min="5" max="150" step="5" value="${p.km}"></label>
+ <label class="f">Distance maximale : <span id="kmv">${kmText(p.km)}</span><input id="km" class="slider" type="range" min="5" max="150" step="5" value="${+p.km===0?150:p.km}" ${+p.km===0?"disabled":""}></label>
+ <label class="row small"><input id="kmworld" type="checkbox" ${+p.km===0?"checked":""}> <span>Monde entier : aucune limite de distance (les personnes lointaines apparaissent dans « Par distance »)</span></label>
  <div class="stack"><span class="f">Critères essentiels (non négociables)</span>${chipGroup("must",[["Moins de 60 km","Moins de 60 km"],["Même type de relation","Même type de relation"],["Non-fumeur","Non-fumeur"]],p.must,true)}</div>
  </section>
  <button class="btn" id="toQ">Continuer vers le questionnaire</button>`},
@@ -2115,13 +2163,14 @@ proposals(){
  return `
  <div class="stack"><p class="eyebrow">Bonjour ${esc(S.profile.pseudo)}</p><h2>Vos propositions</h2>${REMOTE()?'<button class="btn ghost small" id="refresh-remote" style="align-self:flex-start">Actualiser</button>':'<p class="small muted">Profils d’exemple</p>'}</div>
  ${adBanner()}
- ${list.length?`
+ ${list.length?`<div class="seg" role="tablist" aria-label="Trier les propositions"><button role="tab" id="sort-score" aria-selected="${S.propSort!=="dist"}">Par affinité</button><button role="tab" id="sort-dist" aria-selected="${S.propSort==="dist"}">Par distance</button></div>`:""}
+ ${list.length&&S.propSort==="dist"?distanceView(list):list.length?`
  ${proposalBand({id:"high-affinities",title:"Affinités élevées",range:`${cutoff}–100 %`,profiles:high,adEvery:5})}
  ${proposalBand({id:"low-affinities",title:"Affinités plus faibles",range:`${MIN_PROPOSAL_SCORE}–${cutoff-1} %`,profiles:low,adEvery:3})}`
  :`<div class="card empty stack"><h3>Aucune proposition pour l'instant</h3><p class="small muted">${notificationLabels().waiting}</p>${notificationPermission()==='granted'?`<p class="small" style="color:var(--ok)">✓ ${notificationLabels().granted}</p>`:`<button class="btn small" data-notification-open style="align-self:center">${notificationLabels().activate}</button>`}<button class="btn ghost small" data-go="settings" style="align-self:center">Voir mes réglages</button></div>`}`},
 detail(){const p={...findProfile(S.detail)};p.score=score(p);const st=S.status[p.id];const nb=p.remote?p.common_count:pairs(p).length;const mods=moduleScores(p);return `
  <div class="top"><button class="back" data-go="proposals">‹ Propositions</button></div>
- <div class="stack" style="align-items:center;text-align:center">${ring(p.score,true)}<h2>${esc(p.name)}, ${p.age}</h2><p class="muted small">${gname(p.g)} · ${esc(p.city)} · ${p.km} km · ${esc(p.rel)}</p><p>${esc(p.bio)}</p></div>
+ <div class="stack" style="align-items:center;text-align:center">${ring(p.score,true)}<h2>${esc(p.name)}, ${p.age}</h2><p class="muted small">${gname(p.g)} · ${esc(p.city)} · ${bandLabel(p)} · ${esc(p.rel)}${closerTag(p)}</p><p>${esc(p.bio)}</p></div>
  ${shared(p).length?`<div class="card stack"><h3>Grâce à vos connecteurs</h3>${shared(p).map(([c,l])=>`<div class="stack" style="gap:6px"><span class="eyebrow">${CATS[c]}</span><div class="chips">${l.map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div></div>`).join("")}<p class="small muted">Questionnaire ${qscore(p)} % + connecteurs +${bonus(p)} = ${p.score} %</p></div>`:`<div class="card stack"><h3>Grâce à vos connecteurs</h3><p class="small muted">Lieux : villes, régions et événements seulement, jamais d'adresse ni de date.</p><p class="small muted">${Object.keys(S.conn).length?"Pas encore de point commun détecté par vos connecteurs.":"Importez vos sports, abonnements ou titres depuis votre profil."}</p></div>`}
  <div class="card stack"><h3>Vos 3 points communs</h3><div class="chips">${common(p).map(t=>`<span class="tag ok">${esc(t)}</span>`).join("")}</div></div>
  <div class="card stack"><h3>Compatibilité par module</h3><p class="small muted">Calculée sur ${nb} questions répondues par vous deux.</p>${mods.map(([n,v,c])=>`<div class="stack" style="gap:4px"><div class="row small" style="justify-content:space-between"><span>${n}</span><b style="font-variant-numeric:tabular-nums">${v} %</b></div><div class="progress"><i style="width:${v}%"></i></div></div>`).join("")}</div>
@@ -2157,7 +2206,8 @@ settings(){const p=S.profile;return `
  <div class="card stack"><h3>Publicité et confidentialité</h3>
   <div class="row"><span class="small" style="flex:1">Pub personnalisée selon mon âge, ma région et mes loisirs déclarés. Jamais selon mon orientation, ma santé ou mes messages.</span><button class="switch" role="switch" id="adsw" aria-checked="${S.adsConsent}" aria-label="Pub personnalisée"></button></div>
   <p class="small muted">Désactivé : vous voyez des pubs non ciblées. Vos données ne sont jamais vendues.</p>
-  <div class="row"><span class="small" style="flex:1">Questions sensibles (religion, politique, vie intime) utilisées pour le score. Retirer l’accord efface ces 5 réponses.</span><button class="switch" role="switch" id="sensw" aria-checked="${!!S.consents.sensitive}" aria-label="Questions sensibles"></button></div></div>
+  <div class="row"><span class="small" style="flex:1">Questions sensibles (religion, politique, vie intime) utilisées pour le score. Retirer l’accord efface ces 5 réponses.</span><button class="switch" role="switch" id="sensw" aria-checked="${!!S.consents.sensitive}" aria-label="Questions sensibles"></button></div>
+  ${REMOTE()?`<div class="row" style="gap:12px"><span class="small" style="flex:1">Position approximative (GPS), mise à jour seulement à l’ouverture de l’app. Elle est arrondie à environ 2 km et ne sert qu’à calculer des tranches de distance ; personne ne voit votre position. Retirer l’accord l’efface.</span><button class="switch" role="switch" id="geosw" aria-checked="${!!S.consents.location}" aria-label="Position approximative"></button></div>`:""}</div>
  <div class="card stack"><h3>Affinités et seuils</h3>
   <label class="f">Seuil des affinités élevées <span id="thv">${S.threshold} %</span><input id="th" class="slider" type="range" min="55" max="95" step="5" value="${S.threshold}"></label>
   <p class="small muted">Les propositions commencent à ${MIN_PROPOSAL_SCORE} % de compatibilité.</p></div>
@@ -2208,7 +2258,7 @@ window.addEventListener("scroll",()=>{
  highlightProfileSection((active||sections[0]).id);
 },{passive:true});
 
-function readProfile(){const p=S.profile;p.pseudo=$("#pseudo").value.trim()||"Alex";p.born=$("#born").value||p.born;p.city=$("#city").value;p.country=$("#country").value;p.gender=$("#gender").value;p.rel=$("#rel").value;const pick=g=>[...document.querySelectorAll(`[data-group="${g}"] [aria-pressed="true"]`)].map(b=>b.dataset.val);p.status=pick("status")[0]||p.status;p.kids=pick("kids")[0]||p.kids;p.proj=pick("proj")[0]||p.proj;p.kidsOk=pick("kidsOk");p.projOk=pick("projOk");p.km=+$("#km").value;
+function readProfile(){const p=S.profile;p.pseudo=$("#pseudo").value.trim()||"Alex";p.born=$("#born").value||p.born;p.city=$("#city").value;p.country=$("#country").value;p.gender=$("#gender").value;p.rel=$("#rel").value;const pick=g=>[...document.querySelectorAll(`[data-group="${g}"] [aria-pressed="true"]`)].map(b=>b.dataset.val);p.status=pick("status")[0]||p.status;p.kids=pick("kids")[0]||p.kids;p.proj=pick("proj")[0]||p.proj;p.kidsOk=pick("kidsOk");p.projOk=pick("projOk");p.km=$("#kmworld")?.checked?0:+$("#km").value;
  p.ages=[...document.querySelectorAll('[data-group="ages"] [aria-pressed="true"]')].map(b=>b.dataset.val);
  p.seek=[...document.querySelectorAll('[data-group="seek"] [aria-pressed="true"]')].map(b=>b.dataset.val);
  p.must=[...document.querySelectorAll('[data-group="must"] [aria-pressed="true"]')].map(b=>b.dataset.val)}
@@ -2242,6 +2292,10 @@ document.addEventListener("click",e=>{
  if(e.target.id==="watch"){playAd();return}
  if(e.target.id==="adsw"){S.adsConsent=!S.adsConsent;S.consents.ads=S.adsConsent;render();
   if(REMOTE())API.rpc("record_consent",{p_purpose:"ads_personalized",p_scope:null,p_granted:S.adsConsent,p_version:CONSENT_VERSION}).catch(()=>{});return}
+ if(e.target.id==="geosw"){const on=!S.consents.location;
+  API.rpc("record_consent",{p_purpose:"location",p_scope:null,p_granted:on,p_version:CONSENT_VERSION}).then(async()=>{S.consents.location=on;saveLocalProfile();render();
+   if(on){const ok=await geoUpdate(true);toast(ok?"Position approximative activée.":"Position indisponible : autorisez la localisation pour Cruch Finder.")}else{toast("Position effacée. La distance utilise de nouveau votre ville.");loadProposals(false).then(render).catch(()=>{})}}).catch(e=>toast(errText(e)));return}
+ if(e.target.id==="sort-score"||e.target.id==="sort-dist"){S.propSort=e.target.id==="sort-dist"?"dist":"score";render();return}
  if(e.target.id==="sensw"){const on=!S.consents.sensitive;S.consents.sensitive=on;
   if(on){QS.forEach((q,i)=>{if(q.sensitive)S.ans[i]=null});const first=QS.findIndex(q=>q.sensitive);toast("5 questions ajoutées au questionnaire.");go("quiz",{step:Math.floor(first/PER)})}
   else{applySensitive();render();toast("Réponses sensibles effacées.")}
@@ -2313,6 +2367,7 @@ document.addEventListener("click",e=>{
 document.addEventListener("change",e=>{if(e.target.id==="langsel"){LANG=e.target.value;try{localStorage.setItem("cf_lang",LANG)}catch(x){}render();window.scrollTo(0,0)}});
 document.addEventListener("input",e=>{
  if(e.target.id==="km")$("#kmv").textContent=e.target.value+" km";
+ if(e.target.id==="kmworld"){const w=e.target.checked,k=$("#km");k.disabled=w;$("#kmv").textContent=w?"Monde entier":k.value+" km"}
  if(e.target.id==="country"){const c=e.target.value;$("#city").innerHTML=GEO[c].map(([n])=>`<option>${n}</option>`).join("")}
  if(e.target.id==="th"){S.threshold=+e.target.value;$("#thv").textContent=S.threshold+" %"}
 });
@@ -2324,7 +2379,7 @@ document.addEventListener("submit",e=>{e.preventDefault();const fid=e.target.id;
  setTimeout(()=>{$("#typing")&&($("#typing").outerHTML=`<p class="sys" id="typing">${esc(p.name)} écrit…</p>`)},500);
  setTimeout(()=>{ms.push({t:first?(p.reply||"Salut !"):["Ah oui, carrément !","Haha, j'aime bien 😄","On se fait un café cette semaine ?","Raconte-moi ça !"][ms.length%4]});if(S.view==="chat"&&S.chatWith===pid){render();$("#msg")&&$("#msg").focus()}},1700)});
 render();
-if(API.ready())API.call("auth.session").then(r=>{if(r&&r.email){S.session={email:r.email};if(["welcome","auth","verify","forgot","reset"].includes(S.view))afterLogin(r.email);else{loadProposals(false).then(render).catch(()=>{});render()}}
+if(API.ready())API.call("auth.session").then(r=>{if(r&&r.email){S.session={email:r.email};if(["welcome","auth","verify","forgot","reset"].includes(S.view))afterLogin(r.email);else{loadProposals(false).then(render).catch(()=>{});render();geoUpdate(false)}}
  else if(!["welcome","auth","verify","forgot","reset"].includes(S.view)){S.view="welcome";render()}}).catch(()=>{});
 </script>
 
