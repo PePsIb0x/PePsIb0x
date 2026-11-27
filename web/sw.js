@@ -1,7 +1,7 @@
 /* Cruch Finder service worker.
    App shell: cache-first, refreshed in the background.
    API, auth and any cross-origin call except fonts: network only, never cached. */
-const VERSION = "202611250057";
+const VERSION = "202611271000";
 const SHELL = "cf-shell-" + VERSION;
 const FONTS = "cf-fonts-v1";
 const SHELL_FILES = ["./", "./index.html", "./manifest.webmanifest",
