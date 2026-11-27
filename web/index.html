@@ -75,6 +75,23 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
 .tag.ok{background:var(--ok-soft);color:var(--ok)}
 .star{width:100%;max-width:340px;align-self:center;display:block}.star .starn{font-size:12px;font-weight:700;fill:var(--muted)}.starleg i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}.starnum{display:inline-block;min-width:1.2em;color:var(--muted)}.progress{height:6px;background:var(--line);border-radius:6px;overflow:hidden}
 .progress i{display:block;height:100%;background:var(--accent);border-radius:6px;transition:width .3s}
+/* Questionnaire : l'orbite se construit page après page (18 pages = 18 étoiles). État final par défaut. */
+.qorbit{position:relative;height:132px;border-radius:20px;overflow:hidden;background:radial-gradient(120% 90% at 50% 10%,#4f2366 0%,#2a1433 60%,#1a0d1f 100%);box-shadow:inset 0 0 0 1px #ffffff14}
+.qorbit svg{display:block;width:100%;height:100%}
+.qorbit .qo-rot{transform-origin:150px 66px;animation:orbSpin 140s linear infinite}
+.qorbit .qo-track{fill:none;stroke:#ffffff14;stroke-dasharray:2 5}
+.qorbit .qo-s{fill:#7d6a78;opacity:.55}
+.qorbit .qo-s.on{fill:#F0598F;opacity:1;filter:drop-shadow(0 0 4px #F0598F)}
+.qorbit .qo-l{stroke:#F0598F;stroke-width:1.3;fill:none;opacity:.75;stroke-dasharray:200}
+.qorbit .qo-new{animation:qoPop .9s cubic-bezier(.3,1.6,.5,1) .15s backwards}
+.qorbit .qo-l.qo-new{animation:qoDraw 1s cubic-bezier(.3,.7,.2,1) backwards}
+.qorbit .qo-cur{fill:none;stroke:#fff;stroke-width:1.5;transform-box:fill-box;transform-origin:center;animation:qoBeat 1.8s ease-out infinite}
+.qorbit .qo-me{fill:#fff;filter:drop-shadow(0 0 10px #F0598F)}
+.qorbit .qo-pct{position:absolute;right:14px;bottom:10px;font-family:var(--display);font-weight:800;font-size:22px;color:#fff;font-variant-numeric:tabular-nums;line-height:1}
+.qorbit .qo-pct small{display:block;font-family:var(--body);font-weight:500;font-size:11px;color:#cdbac6;text-align:right;margin-top:3px}
+@keyframes qoPop{from{opacity:0;transform:scale(.2)}}
+@keyframes qoDraw{from{stroke-dashoffset:200;opacity:0}}
+@keyframes qoBeat{0%{transform:scale(.8);opacity:.9}100%{transform:scale(2.2);opacity:0}}
 .q{display:flex;flex-direction:column;gap:10px}
 .lik{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
 .lik button{border:1.5px solid var(--line);background:var(--surface);color:var(--ink);border-radius:10px;padding:10px 0;font-weight:600}
@@ -2232,6 +2249,13 @@ function deleteSheet(){sheet(`<h3>Supprimer mon compte</h3><p class="small muted
 function orbitSky(min){let seed=11,d="",l="";const R=()=>(seed=(seed*9301+49297)%233280)/233280,hitEvery=min>=50?6:4;for(let i=0;i<54;i++){const a=R()*Math.PI*2,r=40+R()*78,x=(150+Math.cos(a)*r*1.18).toFixed(1),y=(95+Math.sin(a)*r*.68).toFixed(1),hit=i%hitEvery===0,dl=(.15+i*.035).toFixed(2);d+=`<circle class="od${hit?" hit":""}" cx="${x}" cy="${y}" r="${hit?4.2:2.4}" style="animation-delay:${dl}s${hit?`,${(1.4+i*.03).toFixed(2)}s`:""}"/>`;if(hit)l+=`<path class="ol" d="M150 95L${x} ${y}" style="animation-delay:${(1.6+i*.03).toFixed(2)}s"/>`}
 return `<svg class="sky" viewBox="0 0 300 190" aria-hidden="true" focusable="false"><g class="ring-o">${l}${d}</g><circle class="halo" cx="150" cy="95" r="14"/><circle class="me" cx="150" cy="95" r="9"/></svg>`}
 function orbitRing(f){return `<svg class="rg" viewBox="0 0 34 34" aria-hidden="true" focusable="false"><circle class="t" cx="17" cy="17" r="14"/><circle class="p" cx="17" cy="17" r="14" style="stroke-dashoffset:${(88*(1-f)).toFixed(1)}"/></svg>`}
+function quizOrbit(step){const n=PAGES,cx=150,cy=66,pts=[];
+ for(let i=0;i<n;i++){const a=-Math.PI/2+i*2*Math.PI/n,mod=Math.floor(i/3),r=1-(i%3)*.16;pts.push([(cx+Math.cos(a)*118*r).toFixed(1),(cy+Math.sin(a)*54*r).toFixed(1),mod])}
+ const fresh=S.qoLast!==undefined&&step>S.qoLast?step-1:-1;S.qoLast=step;
+ const lines=pts.map(([x,y],i)=>i<step?`<path class="qo-l${i===fresh?" qo-new":""}" d="M${cx} ${cy}L${x} ${y}"/>`:"").join("");
+ const stars=pts.map(([x,y],i)=>`<circle class="qo-s${i<step?" on":""}${i===fresh?" qo-new":""}" cx="${x}" cy="${y}" r="${i<step?4:2.6}"/>${i===step?`<circle class="qo-cur" cx="${x}" cy="${y}" r="6"/>`:""}`).join("");
+ const pct=Math.round(step/n*100);
+ return `<div class="qorbit" role="img" aria-label="${pct} %"><svg viewBox="0 0 300 132" preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false"><g class="qo-rot"><ellipse class="qo-track" cx="${cx}" cy="${cy}" rx="118" ry="54"/>${lines}${stars}</g><circle class="qo-me" cx="${cx}" cy="${cy}" r="8"/></svg><span class="qo-pct">${pct} %</span></div>`}
 const V={
 welcome(){return `
  <div class="stack" style="padding-top:28px">
@@ -2342,7 +2366,7 @@ profile(){const p=S.profile;return `
  <button class="btn" id="toQ">Continuer vers le questionnaire</button>`},
 quiz(){const mi=Math.floor(S.step/3),part=S.step%3,m=MODULES[mi],base=mi*30+part*PER;const done=S.ans.filter(v=>v!=null).length;return `
  <div class="top"><button class="back" id="qback">‹ Retour</button><span class="small muted" style="margin-left:auto">Module ${mi+1} sur 6 · partie ${part+1} sur 3</span></div>
- <div class="progress" aria-hidden="true"><i style="width:${(S.step+1)/PAGES*100}%"></i></div>
+ ${quizOrbit(S.step)}
  <div class="stack"><p class="eyebrow">Étape 2 sur 2 · Questionnaire · ${done} réponses sur ${QS.length}</p><h2>${m.name}</h2>
  <p class="small muted">Toutes les questions sont obligatoires. « Préfère ne pas répondre » compte comme une réponse, mais n’entre pas dans le score.${m.w>1?` <span>Ce module compte double.</span>`:""}</p></div>
  ${DEMO()&&S.step===0&&S.ans.every(value=>value===null||value===0)?'<button class="btn ghost" id="sample-answers">Utiliser les réponses d’exemple</button>':""}
