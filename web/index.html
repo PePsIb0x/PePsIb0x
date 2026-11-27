@@ -1176,6 +1176,17 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
 
   var oauthWin = null; // popup Spotify / Strava, fermée par la page dès que l'import est reçu
   function closeOAuth() { try { oauthWin && oauthWin.close(); } catch (e) {} oauthWin = null; }
+  function popupFeatures() {
+    var W = 480, H = 700, x = Math.max(0, (screen.width - W) / 2), y = Math.max(0, (screen.height - H) / 2);
+    return "popup,width=" + W + ",height=" + H + ",left=" + x + ",top=" + y;
+  }
+  // Ouverte pendant le clic (sinon bloquée), elle reçoit l'adresse Spotify / Strava dès que le ticket arrive
+  function preOAuth() {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser) return false;
+    closeOAuth();
+    oauthWin = window.open("about:blank", "cf_connect", popupFeatures());
+    return !!oauthWin;
+  }
 
   function handle(action) {
     var m;
@@ -1187,8 +1198,8 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
       var base = String(window.CF_API_BASE || "https://api.optima-tools.ch/v1").replace(/\/+$/, "");
       var url = base + "/connect/" + m[1] + "/start?t=" + m[2];
       if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser) { openExternal(url); return true; }
-      var W = 480, H = 700, x = Math.max(0, (screen.width - W) / 2), y = Math.max(0, (screen.height - H) / 2);
-      oauthWin = window.open(url, "cf_connect", "popup,width=" + W + ",height=" + H + ",left=" + x + ",top=" + y);
+      if (oauthWin && !oauthWin.closed) { try { oauthWin.location.replace(url); oauthWin.focus(); return true; } catch (e) {} }
+      oauthWin = window.open(url, "cf_connect", popupFeatures());
       if (!oauthWin) location.href = url;
       return true;
     }
@@ -1280,7 +1291,7 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
       .finally(function () { token = null; });
   })();
 
-  window.CFImport = { pick: pick, handle: handle, closeOAuth: closeOAuth };
+  window.CFImport = { pick: pick, handle: handle, closeOAuth: closeOAuth, preOAuth: preOAuth };
 
   document.addEventListener("click", function (ev) {
     var a = ev.target && ev.target.closest && ev.target.closest("a[href]");
@@ -1468,14 +1479,18 @@ function connList(){
   return `<button type="button" class="conn" data-conn="${c.id}">
    <span class="logo" style="background:${c.col}${c.ink?`;color:${c.ink}`:""}">${c.name.slice(0,2)}</span>
    <span style="min-width:0"><b>${c.name}</b><br><span class="small muted">${authorized?`${googleAccountData.titles.length} abonnements YouTube`:imported?esc(importSummary(c,imported)):c.description}</span></span>
-   <span class="state" style="color:${authorized||imported?"var(--ok)":"var(--muted)"}">${c.unavailable?"Indisponible":authorized?"Connecté":imported?"Importé":c.id==="google"?"Connecter":"Importer"}</span>
+   <span class="state" style="color:${authorized||imported?"var(--ok)":"var(--muted)"}">${c.unavailable?"Indisponible":authorized?"Connecté":imported?"Importé":c.id==="google"||oauthOn(c.id)?"Connecter":"Importer"}</span>
   </button>`;
  }).join("")}</section>`;
 }
 
 // Connexion directe (Spotify, Strava) : passe par notre API, identique sur le site, l'APK et l'iPhone
-const OAUTH={spotify:"Spotify",strava:"Strava"};let oauthTicket=null,oauthTimer=null;
-function oauthStart(p){API.rpc("connect_start",{p_provider:p}).then(r=>{oauthTicket={p,t:r.ticket,at:Date.now()};connSheet(CONNECTORS.find(c=>c.id===p));oauthPoll()}).catch(x=>toast(errText(x)))}
+const OAUTH={spotify:"Spotify",strava:"Strava"};let oauthTicket=null,oauthTimer=null,oauthAvail=null;
+// Seuls les services réellement configurés sur l'API ont un bouton « Connecter »
+function oauthOn(id){if(!OAUTH[id]||!REMOTE())return false;if(oauthAvail===null){oauthAvail=[];API.rpc("connect_providers").then(a=>{oauthAvail=Array.isArray(a)?a:[];if(S.view==="connect"||S.view==="settings")render()}).catch(()=>{oauthAvail=null})}return oauthAvail.includes(id)}
+// Un seul clic : la fenêtre s'ouvre tout de suite (sinon le navigateur la bloque), puis reçoit l'adresse du service
+function oauthStart(p){const pre=window.CFImport&&CFImport.preOAuth?CFImport.preOAuth():false;
+ API.rpc("connect_start",{p_provider:p}).then(r=>{oauthTicket={p,t:r.ticket,at:Date.now()};connSheet(CONNECTORS.find(c=>c.id===p));if(window.CFImport&&CFImport.handle)CFImport.handle(`oauth/${p}/${r.ticket}`);oauthPoll()}).catch(x=>{if(pre)try{CFImport.closeOAuth()}catch(e){}toast(errText(x))})}
 function oauthPoll(){clearTimeout(oauthTimer);if(!oauthTicket)return;if(Date.now()-oauthTicket.at>15*60000){oauthTicket=null;return}
  const tk=oauthTicket;API.rpc("connect_result",{p_ticket:tk.t}).then(r=>{if(oauthTicket!==tk)return;
   if(r.status==="pending"){oauthTimer=setTimeout(oauthPoll,document.hidden?5000:2500);return}
@@ -1505,7 +1520,7 @@ function connSheet(c){
    <a class="small muted" href="${CONNECTOR_ORIGIN}policy/youtube">Conditions YouTube</a>
    <a class="small muted" href="${CONNECTOR_ORIGIN}policy/google">Confidentialité Google</a>
   </section><h3>Import par fichier</h3>`:""}
-  ${OAUTH[c.id]&&REMOTE()?`<section class="stack"><h3>Connexion directe</h3>${oauthTicket&&oauthTicket.p===c.id?`<a class="btn native-action" href="${CONNECTOR_ORIGIN}oauth/${c.id}/${oauthTicket.t}">Continuer vers ${OAUTH[c.id]}</a><p class="small muted">En attente de la connexion…</p>`:`<button type="button" class="btn" data-oauth="${c.id}">Connecter ${OAUTH[c.id]}</button>`}<p class="small muted">Lecture unique de votre compte : aucun mot de passe ni accès n’est conservé.</p></section><h3>Import par fichier</h3>`:""}
+  ${oauthOn(c.id)?`<section class="stack"><h3>Connexion directe</h3>${oauthTicket&&oauthTicket.p===c.id?`<a class="btn native-action" href="${CONNECTOR_ORIGIN}oauth/${c.id}/${oauthTicket.t}">Continuer vers ${OAUTH[c.id]}</a><p class="small muted">En attente de la connexion…</p>`:`<button type="button" class="btn" data-oauth="${c.id}">Connecter ${OAUTH[c.id]}</button>`}<p class="small muted">Lecture unique de votre compte : aucun mot de passe ni accès n’est conservé.</p></section><h3>Import par fichier</h3>`:""}
   <p class="small muted">${c.guide}</p>
   <p class="small"><b>${c.format}</b></p>
   <p class="small muted consent-note">Le fichier est lu sur ce téléphone et n’est jamais envoyé. En l’important, vous acceptez que soient utilisés pour le calcul de compatibilité : ${c.sends}. Vous pouvez effacer l’import à tout moment.</p>
