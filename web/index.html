@@ -282,6 +282,50 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
   "use strict";
   if (window.CFNative) return; // pont Android natif déjà présent
 
+  // ---------- Fenêtre popup de connexion (Google, YouTube) ----------
+  // Dans la popup : au retour de Google, la réponse est renvoyée à la page d'origine, puis la popup se ferme.
+  // BroadcastChannel (et localStorage en secours) marche même quand Google coupe le lien window.opener.
+  var POPUP_MARK = "cf_popup_open", POPUP_MSG = "cf_oauth_msg";
+  (function () {
+    if (!/[#&](id_token|access_token|error)=/.test(location.hash)) return;
+    var mark = 0; try { mark = +localStorage.getItem(POPUP_MARK) || 0; } catch (e) {}
+    if (!mark || Date.now() - mark > 600000) return;
+    var h = location.hash.slice(1);
+    history.replaceState(null, "", location.pathname + location.search);
+    window.__cfPopupDone = true;
+    try { var bc = new BroadcastChannel("cf-oauth"); bc.postMessage({ cfOAuth: h }); bc.close(); } catch (e) {}
+    try { localStorage.setItem(POPUP_MSG, JSON.stringify({ h: h, at: Date.now() })); } catch (e) {}
+    document.addEventListener("DOMContentLoaded", function () {
+      document.body.innerHTML = '<p style="font:17px/1.5 system-ui,sans-serif;padding:48px 24px;text-align:center">Connexion terminée. Vous pouvez fermer cette fenêtre.</p>';
+    });
+    setTimeout(function () { window.close(); }, 250);
+  })();
+  // Côté page : ouvre la popup et attend sa réponse. Rejette { blocked } si le navigateur bloque la popup,
+  // { cancelled } si la personne la ferme sans terminer.
+  window.CFOAuthPopup = function (url) {
+    return new Promise(function (res, rej) {
+      try { localStorage.setItem(POPUP_MARK, String(Date.now())); localStorage.removeItem(POPUP_MSG); } catch (e) {}
+      var W = 480, H = 640, x = Math.max(0, (screen.width - W) / 2), y = Math.max(0, (screen.height - H) / 2);
+      var w = window.open(url, "cf_oauth", "popup,width=" + W + ",height=" + H + ",left=" + x + ",top=" + y);
+      var done = false, bc = null, timer = null;
+      function cleanup() {
+        done = true; clearTimeout(timer);
+        window.removeEventListener("storage", onStorage); window.removeEventListener("focus", onFocus);
+        try { bc && bc.close(); } catch (e) {}
+        try { localStorage.removeItem(POPUP_MARK); localStorage.removeItem(POPUP_MSG); } catch (e) {}
+      }
+      function finish(h) { if (done) return; cleanup(); try { w && w.close(); } catch (e) {} res(new URLSearchParams(h)); }
+      function fail(why) { if (done) return; cleanup(); var e = new Error(why); e.code = why; e[why] = true; rej(e); }
+      function onStorage(e) { if (e.key === POPUP_MSG && e.newValue) { try { finish(JSON.parse(e.newValue).h); } catch (x) {} } }
+      function onFocus() { setTimeout(function () { if (!done) { try { var m = JSON.parse(localStorage.getItem(POPUP_MSG) || "null"); if (m) { finish(m.h); return; } } catch (e) {} fail("cancelled"); } }, 2500); }
+      if (!w) { fail("blocked"); return; }
+      try { bc = new BroadcastChannel("cf-oauth"); bc.onmessage = function (e) { if (e.data && e.data.cfOAuth) finish(e.data.cfOAuth); }; } catch (e) {}
+      window.addEventListener("storage", onStorage);
+      setTimeout(function () { window.addEventListener("focus", onFocus); }, 800);
+      timer = setTimeout(function () { fail("cancelled"); }, 600000);
+    });
+  };
+
   var API = (window.CF_API_BASE || "https://api.optima-tools.ch/v1").replace(/\/$/, "");
   var KEY = "cf_session_v1";
   var GOOGLE_WEB = window.CF_GOOGLE_WEB_CLIENT_ID || "";   // client OAuth « Application Web » (aussi audience serveur)
@@ -378,16 +422,25 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
       var t = await http("/auth/google", { id_token: idt, nonce: nonce });
       saveTokens(t); return session(t);
     }
-    // Web : redirection OAuth vers Google (pas de script tiers, compatible avec la CSP de la page).
+    // Web : fenêtre popup Google (pas de script tiers, compatible avec la CSP de la page).
+    // Si le navigateur bloque la popup, on repasse par une redirection de la page entière.
     if (!GOOGLE_WEB) throw new ApiError(0, { error: "not_configured", message: "Google" });
     var state = randomString(16);
-    sessionStorage.setItem(OAUTH_KEY, JSON.stringify({ state: state, nonce: nonce, at: Date.now() }));
     var q = new URLSearchParams({
       client_id: GOOGLE_WEB, response_type: "id_token", scope: "openid email profile",
       redirect_uri: location.origin + location.pathname, nonce: nonce, state: state, prompt: "select_account"
     });
-    location.assign("https://accounts.google.com/o/oauth2/v2/auth?" + q.toString());
-    return new Promise(function () {}); // la page part chez Google ; la suite se fait au retour
+    var url = "https://accounts.google.com/o/oauth2/v2/auth?" + q.toString(), h;
+    try { h = await window.CFOAuthPopup(url); }
+    catch (e) {
+      if (!e.blocked) throw cancelled();
+      sessionStorage.setItem(OAUTH_KEY, JSON.stringify({ state: state, nonce: nonce, at: Date.now() }));
+      location.assign(url);
+      return new Promise(function () {}); // la page part chez Google ; la suite se fait au retour
+    }
+    if (h.get("state") !== state || !h.get("id_token")) throw cancelled();
+    var tk = await http("/auth/google", { id_token: h.get("id_token"), nonce: nonce });
+    saveTokens(tk); return session(tk);
   }
 
   async function appleLogin() {
@@ -405,7 +458,7 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
   // Retour de Google sur le web : #id_token=…&state=…
   var oauthReturn = null, oauthResult = null;
   (function () {
-    if (isApp || !/[#&]id_token=|[#&]error=/.test(location.hash)) return;
+    if (isApp || window.__cfPopupDone || !/[#&]id_token=|[#&]error=/.test(location.hash)) return;
     var h = new URLSearchParams(location.hash.slice(1)), pending = null;
     try { pending = JSON.parse(sessionStorage.getItem(OAUTH_KEY) || "null"); sessionStorage.removeItem(OAUTH_KEY); } catch (e) {}
     history.replaceState(null, "", location.pathname + location.search);
@@ -1121,6 +1174,9 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
     document.body.appendChild(input); input.click();
   }
 
+  var oauthWin = null; // popup Spotify / Strava, fermée par la page dès que l'import est reçu
+  function closeOAuth() { try { oauthWin && oauthWin.close(); } catch (e) {} oauthWin = null; }
+
   function handle(action) {
     var m;
     if ((m = action.match(/^import\/([\w-]+)$/)) && EXPORT_LINKS[m[1]]) { pick(m[1]); return true; }
@@ -1129,7 +1185,12 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
     if (action === "connect/google") { youtubeConnect(); return true; }
     if ((m = action.match(/^oauth\/(spotify|strava)\/([\w-]{43})$/))) {
       var base = String(window.CF_API_BASE || "https://api.optima-tools.ch/v1").replace(/\/+$/, "");
-      openExternal(base + "/connect/" + m[1] + "/start?t=" + m[2]); return true;
+      var url = base + "/connect/" + m[1] + "/start?t=" + m[2];
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser) { openExternal(url); return true; }
+      var W = 480, H = 700, x = Math.max(0, (screen.width - W) / 2), y = Math.max(0, (screen.height - H) / 2);
+      oauthWin = window.open(url, "cf_connect", "popup,width=" + W + ",height=" + H + ",left=" + x + ",top=" + y);
+      if (!oauthWin) location.href = url;
+      return true;
     }
     return false;
   }
@@ -1163,12 +1224,25 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
       return;
     }
     var state = randomHex(16);
-    try { sessionStorage.setItem(YT_KEY, JSON.stringify({ state: state, at: Date.now() })); } catch (e) {}
     var q = new URLSearchParams({
       client_id: GOOGLE_WEB, response_type: "token", scope: YT_SCOPE, include_granted_scopes: "false",
       redirect_uri: location.origin + location.pathname, state: state, prompt: "select_account"
     });
-    location.assign("https://accounts.google.com/o/oauth2/v2/auth?" + q.toString());
+    var url = "https://accounts.google.com/o/oauth2/v2/auth?" + q.toString();
+    var redirect = function () {
+      try { sessionStorage.setItem(YT_KEY, JSON.stringify({ state: state, at: Date.now() })); } catch (e) {}
+      location.assign(url);
+    };
+    if (typeof window.CFOAuthPopup !== "function") { redirect(); return; }
+    window.CFOAuthPopup(url).then(function (h) {
+      var token = h.get("access_token"), scopes = h.get("scope") || "";
+      if (!token || h.get("state") !== state) { giveGoogle("Autorisation Google annulée."); return; }
+      if (scopes && scopes.split(" ").indexOf(YT_SCOPE) < 0) { giveGoogle("L’accès aux abonnements YouTube n’a pas été autorisé."); return; }
+      youtubeSubscriptions(token)
+        .then(function (r) { giveGoogle(r); })
+        .catch(function () { giveGoogle("Impossible de lire les abonnements YouTube. Vérifiez que le compte dispose d’une chaîne YouTube."); })
+        .finally(function () { token = null; });
+    }, function (e) { if (e && e.blocked) redirect(); });
   }
 
   async function youtubeSubscriptions(token) {
@@ -1189,6 +1263,7 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
 
   // Retour de Google : #access_token=…&state=…  (ou #error=… si refus ; le pont a pu déjà nettoyer l'adresse)
   (function () {
+    if (window.__cfPopupDone) return;
     var pending = null;
     try { pending = JSON.parse(sessionStorage.getItem(YT_KEY) || "null"); } catch (e) {}
     if (!pending) return;
@@ -1205,7 +1280,7 @@ input,select{font:inherit;padding:11px 12px;border-radius:11px;border:1.5px soli
       .finally(function () { token = null; });
   })();
 
-  window.CFImport = { pick: pick, handle: handle };
+  window.CFImport = { pick: pick, handle: handle, closeOAuth: closeOAuth };
 
   document.addEventListener("click", function (ev) {
     var a = ev.target && ev.target.closest && ev.target.closest("a[href]");
@@ -1404,7 +1479,7 @@ function oauthStart(p){API.rpc("connect_start",{p_provider:p}).then(r=>{oauthTic
 function oauthPoll(){clearTimeout(oauthTimer);if(!oauthTicket)return;if(Date.now()-oauthTicket.at>15*60000){oauthTicket=null;return}
  const tk=oauthTicket;API.rpc("connect_result",{p_ticket:tk.t}).then(r=>{if(oauthTicket!==tk)return;
   if(r.status==="pending"){oauthTimer=setTimeout(oauthPoll,document.hidden?5000:2500);return}
-  oauthTicket=null;if(r.status==="done")window.receiveConnectorImport(tk.p,oauthData(tk.p,r.data));else toast(r.message||"Connexion expirée, recommencez.")})
+  oauthTicket=null;try{window.CFImport&&CFImport.closeOAuth&&CFImport.closeOAuth()}catch(e){}if(r.status==="done")window.receiveConnectorImport(tk.p,oauthData(tk.p,r.data));else toast(r.message||"Connexion expirée, recommencez.")})
  .catch(()=>{if(oauthTicket===tk)oauthTimer=setTimeout(oauthPoll,6000)})}
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&oauthTicket)oauthPoll()});
 function oauthData(p,d){d=d||{};
@@ -1443,15 +1518,15 @@ function connSheet(c){
   </div>`);
 }
 
+// Après une connexion réussie : on referme la fiche et on revient à la liste des connecteurs, sur la ligne concernée.
+function backToConnectors(id,msg){closeSheet();render();const b=document.querySelector(`[data-conn="${id}"]`);if(b){b.scrollIntoView({block:"center"});b.classList.add("pop")}toast(msg)}
 window.receiveConnectedGoogle=data=>{
  if(!S.acceptedTerms||!["connect","settings"].includes(S.view))return;
  if(typeof data==="string"){toast(data);return}
  if(!data||!Array.isArray(data.titles))return;
  googleAccountData=data;
  S.conn.google={total:data.titles.length,dated:0,recent:0,primary:data.titles,secondary:[],counts:{},live:true};
- render();
- connSheet(CONNECTORS.find(c=>c.id==="google"));
- toast("Abonnements YouTube chargés.");
+ backToConnectors("google","Abonnements YouTube chargés.");
 };
 document.addEventListener("click",event=>{
  const ob=event.target.closest&&event.target.closest("[data-oauth]");if(ob){oauthStart(ob.dataset.oauth);return}
@@ -1467,9 +1542,7 @@ window.receiveConnectorImport=(id,data)=>{
  if(!connector)return;
  if(typeof data==="string"){toast(data);return}
  S.conn[id]=data;
- render();
- connSheet(connector);
- toast("Import réussi");
+ backToConnectors(id,"Import réussi");
 };
 
 window.androidBack=()=>{
