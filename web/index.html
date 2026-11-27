@@ -1472,8 +1472,11 @@ function importSummary(c,data){
  return `${data.primary.length} ${c.unit||"éléments"}`;
 }
 
+// Seuls les grands services qui permettent une vraie connexion (synchronisation) sont proposés.
+// Les anciens imports par fichier restent visibles dans les paramètres, le temps de pouvoir les effacer.
+const LIVE_CONN=["google","spotify"];
 function connList(){
- return `<section class="card stack" aria-label="Imports de données">${CONNECTORS.map(c=>{
+ return `<section class="card stack" aria-label="Imports de données">${CONNECTORS.filter(c=>LIVE_CONN.includes(c.id)||(S.view==="settings"&&S.conn[c.id])).map(c=>{
   const imported=S.conn[c.id];
   const authorized=c.id==="google"&&googleAccountData!==null;
   return `<button type="button" class="conn" data-conn="${c.id}">
